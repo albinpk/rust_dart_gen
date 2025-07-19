@@ -1,13 +1,10 @@
+use regex::Regex;
 use std::fs;
 
-use regex::Regex;
-
-const COMMENT: &str = "// @flu";
+const FLU_ANNOTATION: &str = "// @flu";
 const CLASS_REGEX: &str = r"^abstract class _(\w+) \{";
 const FIELD_REGEX: &str = r"^\s\s([A-Za-z_].*) get (\w+);$";
 const GENERIC_LIST_REGEX: &str = r"^List<([A-Za-z_].*)>";
-
-// TODO: const constructor
 
 fn main() {
     if let Ok(file) = DartFile::from_file("./test/main.dart") {
@@ -38,12 +35,13 @@ impl DartFile {
         let mut classes: Vec<DartClass> = vec![];
 
         let mut annotation_start = false;
+        let mut class_start = false;
         let mut depth = 0; // scopes { }
 
         // parsing all classes and their fields in a single loop
         for line in lines {
             if !annotation_start {
-                annotation_start = line == COMMENT;
+                annotation_start = line == FLU_ANNOTATION;
                 continue;
             }
 
@@ -54,11 +52,21 @@ impl DartFile {
             }
 
             // checking for a class declaration
-            if depth == 0 {
+            if !class_start {
                 if let Some(cap) = class_regex.captures(line) {
-                    classes.push(DartClass::new(cap[1].to_string(), vec![]));
+                    // start of a @flu class
+                    classes.push(DartClass::new(cap[1].to_string(), false, vec![]));
+                    class_start = true;
                     depth = 1;
                 }
+                continue;
+            }
+
+            // checking for const constructor
+            if depth == 1
+                && line == format!("  const _{}();", classes.last().unwrap().name.to_string())
+            {
+                classes.last_mut().unwrap().has_const_constructor = true;
                 continue;
             }
 
@@ -78,6 +86,11 @@ impl DartFile {
                 if line.contains("}") {
                     depth -= 1
                 };
+                if depth == 0 && class_start {
+                    // end of a @flu class
+                    class_start = false;
+                    annotation_start = false;
+                }
             }
         }
         DartFile::new(path.to_string(), classes)
@@ -88,10 +101,10 @@ impl DartFile {
     }
 
     fn generate_file(&self) {
-        let mut lines: Vec<String> = vec!["part of 'main.dart';\n".to_string()];
+        let mut lines = vec!["// dart format off\n\npart of 'main.dart';".to_string()];
         for class in &self.classes {
             // class definition start
-            lines.push(format!("class {} extends _{} {{", class.name, class.name));
+            lines.push(format!("\nclass {} extends _{} {{", class.name, class.name));
 
             Self::add_constructor(class, &mut lines);
 
@@ -117,7 +130,12 @@ impl DartFile {
     }
 
     fn add_constructor(class: &DartClass, lines: &mut Vec<String>) {
-        lines.push(format!("  const {}({{", class.name));
+        let const_key = if class.has_const_constructor {
+            "const "
+        } else {
+            ""
+        };
+        lines.push(format!("  {const_key}{}({{", class.name));
         for field in &class.fields {
             lines.push(format!("    required this.{},", field.name));
         }
@@ -227,11 +245,16 @@ impl DartFile {
 #[derive(Debug)]
 struct DartClass {
     name: String,
+    has_const_constructor: bool,
     fields: Vec<DartField>,
 }
 impl DartClass {
-    fn new(name: String, fields: Vec<DartField>) -> Self {
-        Self { name, fields }
+    fn new(name: String, has_const_constructor: bool, fields: Vec<DartField>) -> Self {
+        Self {
+            name,
+            has_const_constructor,
+            fields,
+        }
     }
 }
 
