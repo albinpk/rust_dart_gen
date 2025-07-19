@@ -1,3 +1,4 @@
+use glob::glob;
 use regex::Regex;
 use std::fs;
 
@@ -7,8 +8,26 @@ const FIELD_REGEX: &str = r"^\s\s([A-Za-z_].*) get (\w+);$";
 const GENERIC_LIST_REGEX: &str = r"^List<([A-Za-z_].*)>";
 
 fn main() {
-    if let Ok(file) = DartFile::from_file("./test/main.dart") {
-        file.generate_file();
+    let mut dart_paths: Vec<String> = vec![];
+    for entry in glob("**/*.dart").expect("Failed to read glob pattern") {
+        match entry {
+            Err(_) => (),
+            Ok(path) => {
+                let p = path.to_string_lossy().to_string();
+                if !p.ends_with(".flu.dart")
+                    && !p.ends_with(".g.dart")
+                    && !p.ends_with(".freezed.dart")
+                {
+                    dart_paths.push(p);
+                }
+            }
+        }
+    }
+
+    for path in dart_paths {
+        if let Ok(file) = DartFile::from_file(&path) {
+            file.generate_file();
+        }
     }
 }
 
@@ -100,8 +119,25 @@ impl DartFile {
         self.path.replace(".dart", ".flu.dart")
     }
 
+    fn file_name(&self) -> String {
+        self.path.split("/").last().unwrap().to_string()
+        // Path::new(&self.path)
+        //     .file_name()
+        //     .unwrap()
+        //     .to_str()
+        //     .unwrap()
+        //     .to_string()
+    }
+
     fn generate_file(&self) {
-        let mut lines = vec!["// dart format off\n\npart of 'main.dart';".to_string()];
+        if self.classes.is_empty() {
+            eprintln!("No @flu classes found in {}", self.path);
+            return;
+        }
+        let mut lines = vec![
+            "// dart format off\n".to_string(),
+            format!("part of '{}';", self.file_name()),
+        ];
         for class in &self.classes {
             // class definition start
             lines.push(format!("\nclass {} extends _{} {{", class.name, class.name));
