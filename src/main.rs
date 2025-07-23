@@ -163,9 +163,11 @@ impl DartFile {
         if self.classes.is_empty() {
             return;
         }
+        let ignores = "// ignore_for_file: avoid_equals_and_hash_code_on_mutable_classes, document_ignores, lines_longer_than_80_chars";
         let mut lines = vec![
             "// dart format off\n".to_string(),
-            format!("part of '{}';", self.file_name()),
+            ignores.to_string(),
+            format!("\npart of '{}';", self.file_name()),
         ];
         for class in &self.classes {
             // class definition start
@@ -173,9 +175,9 @@ impl DartFile {
 
             Self::add_constructor(class, &mut lines);
 
-            Self::add_fields(class, &mut lines);
-
             Self::add_from_json(class, &mut lines);
+
+            Self::add_fields(class, &mut lines);
 
             Self::add_to_json(class, &mut lines);
 
@@ -188,7 +190,7 @@ impl DartFile {
             Self::add_hash_code(class, &mut lines);
 
             // class definition end
-            lines.push("}".to_string());
+            lines.push("}\n".to_string());
         }
 
         let _ = fs::write(self.generated_path(), lines.join("\n"));
@@ -204,17 +206,7 @@ impl DartFile {
         for field in &class.fields {
             lines.push(format!("    required this.{},", field.name));
         }
-        lines.push("  });\n".to_string());
-    }
-
-    fn add_fields(class: &DartClass, lines: &mut Vec<String>) {
-        for field in &class.fields {
-            lines.push(format!(
-                "  final {} {};",
-                field.typ.type_string(),
-                field.name
-            ));
-        }
+        lines.push("  });".to_string());
     }
 
     fn add_from_json(class: &DartClass, lines: &mut Vec<String>) {
@@ -240,6 +232,16 @@ impl DartFile {
         }
         lines.push("    );".to_string());
         lines.push("  }".to_string());
+    }
+
+    fn add_fields(class: &DartClass, lines: &mut Vec<String>) {
+        for field in &class.fields {
+            lines.push(format!(
+                "\n  @override\n  final {} {};",
+                field.typ.type_string(),
+                field.name
+            ));
+        }
     }
 
     fn add_to_json(class: &DartClass, lines: &mut Vec<String>) {
