@@ -1,15 +1,18 @@
 use glob::glob;
 use regex::Regex;
-use std::fs;
+use std::{fs, thread};
 
 const FLU_ANNOTATION: &str = "// @flu";
 const CLASS_REGEX: &str = r"^abstract class _(\w+) \{";
 const FIELD_REGEX: &str = r"^\s\s([A-Za-z_].*) get (\w+);$";
 const GENERIC_LIST_REGEX: &str = r"^List<([A-Za-z_].*)>";
 
+// TODO: deep collection
+// TODO: num toInt
+
 fn main() {
     let mut dart_paths: Vec<String> = vec![];
-    for entry in glob("**/*.dart").expect("Failed to read glob pattern") {
+    for entry in glob("lib/**/*.dart").expect("Failed to read glob pattern") {
         match entry {
             Err(_) => (),
             Ok(path) => {
@@ -24,11 +27,38 @@ fn main() {
         }
     }
 
-    for path in dart_paths {
-        if let Ok(file) = DartFile::from_file(&path) {
-            file.generate_file();
+    println!("Found {} dart files", dart_paths.len());
+
+    // true == enable multi-threading
+    if true {
+        // TODO: thread count?
+        // let x = available_parallelism().unwrap().get();
+        // println!("Available parallelism: {x}");
+        let parts: Vec<Vec<String>> = dart_paths
+            // .chunks(dart_paths.len() / x) // based on cpu
+            .chunks(1) // max threads
+            .map(|e| e.to_vec())
+            .collect();
+        let mut handle = vec![];
+        for part in parts {
+            handle.push(thread::spawn(move || {
+                for path in part {
+                    if let Ok(file) = DartFile::from_file(&path) {
+                        file.generate_file();
+                    }
+                }
+            }));
+        }
+        handle.into_iter().for_each(|h| h.join().unwrap());
+    } else {
+        for path in &dart_paths {
+            if let Ok(file) = DartFile::from_file(&path) {
+                file.generate_file();
+            }
         }
     }
+
+    println!("{} files generated", dart_paths.len());
 }
 
 #[derive(Debug)]
@@ -131,7 +161,6 @@ impl DartFile {
 
     fn generate_file(&self) {
         if self.classes.is_empty() {
-            eprintln!("No @flu classes found in {}", self.path);
             return;
         }
         let mut lines = vec![
