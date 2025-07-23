@@ -8,7 +8,6 @@ const FIELD_REGEX: &str = r"^\s\s([A-Za-z_].*) get (\w+);$";
 const GENERIC_LIST_REGEX: &str = r"^List<([A-Za-z_].*)>";
 
 // TODO: deep collection
-// TODO: num toInt
 
 fn main() {
     let mut dart_paths: Vec<String> = vec![];
@@ -386,8 +385,7 @@ impl Concrete {
     }
 
     fn is_custom(&self) -> bool {
-        let mat = matches!(self.typ, ConcreteType::Custom(_));
-        mat
+        matches!(self.typ, ConcreteType::Custom(_))
     }
 
     fn from_json_value(&self, key: String) -> String {
@@ -401,7 +399,15 @@ impl Concrete {
             }
             return factory;
         }
-        format!("{key} as {}", self.type_string())
+
+        let null_mark = if self.nullable { "?" } else { "" };
+        match &self.typ {
+            ConcreteType::Int => format!("({key} as num{null_mark}){null_mark}.toInt()"),
+            ConcreteType::Double => format!("({key} as num{null_mark}){null_mark}.toDouble()"),
+            ConcreteType::Bool | ConcreteType::String | ConcreteType::Custom(_) => {
+                format!("{key} as {}", self.type_string())
+            }
+        }
     }
 
     fn to_json_value(&self, key: String) -> String {
