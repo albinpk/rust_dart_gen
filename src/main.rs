@@ -5,6 +5,8 @@ use std::{fs, thread};
 const FLU_ANNOTATION: &str = "// @flu";
 const CLASS_REGEX: &str = r"^abstract class _(\w+) \{";
 const FIELD_REGEX: &str = r"^\s\s([A-Za-z_].*) get (\w+);$";
+const FIELD_COMMENT_REGEX: &str = r#"^\s\s// @flu: (.*)$"#;
+const FIELD_COMMENT_KEY_REGEX: &str = r#".*key="(?P<key>.+)".*"#;
 const GENERIC_LIST_REGEX: &str = r"^List<([A-Za-z_].*)>";
 
 // TODO: deep collection
@@ -78,6 +80,7 @@ impl DartFile {
     fn from_string(content: &str, path: &str) -> Self {
         let class_regex = Regex::new(CLASS_REGEX).unwrap();
         let field_regex = Regex::new(FIELD_REGEX).unwrap();
+        let field_comment_regex = Regex::new(FIELD_COMMENT_REGEX).unwrap();
 
         let lines: Vec<String> = content.lines().map(String::from).collect();
         let mut classes: Vec<DartClass> = vec![];
@@ -87,15 +90,19 @@ impl DartFile {
         let mut depth = 0; // scopes { }
 
         // parsing all classes and their fields in a single loop
-        for line in lines {
+        for (i, line) in lines.iter().enumerate() {
             if !annotation_start {
                 annotation_start = line == FLU_ANNOTATION;
                 continue;
             }
 
             // removing comment from line
-            let line = line.split("//").next().unwrap();
-            if line.trim().is_empty() {
+            let line = if !line.trim_start().starts_with("// @flu: ") {
+                line.split("//").next().unwrap().trim_end()
+            } else {
+                continue;
+            };
+            if line.trim_start().is_empty() {
                 continue;
             }
 
@@ -122,9 +129,14 @@ impl DartFile {
             if depth == 1
                 && let Some(cap) = field_regex.captures(line)
             {
+                let options = match field_comment_regex.captures(&lines[i - 1]) {
+                    Some(cap) => FieldOptions::from_string(&cap[1]),
+                    None => None,
+                };
                 classes.last_mut().unwrap().fields.push(DartField::new(
                     cap[2].to_string(),
                     DartType::new(cap[1].to_string()),
+                    options,
                 ));
             } else {
                 // for skipping method declarations
@@ -215,14 +227,16 @@ impl DartFile {
         ));
         lines.push(format!("    return {}(", class.name));
 
-        for DartField { name, typ } in &class.fields {
+        for field in &class.fields {
+            let DartField { name, typ, .. } = field;
+            let key = field.json_key();
             let value = match typ {
-                DartType::Concrete(concrete) => concrete.from_json_value(format!("json['{name}']")),
+                DartType::Concrete(concrete) => concrete.from_json_value(format!("json['{key}']")),
                 DartType::GenericList { typ, nullable } => {
                     let mapper = format!("(e) => {}", typ.from_json_value("e".to_string()));
                     let null_mark = if *nullable { "?" } else { "" };
                     format!(
-                        "(json['{name}'] as List{}){}.map({mapper}).toList()",
+                        "(json['{key}'] as List{}){}.map({mapper}).toList()",
                         null_mark, null_mark
                     )
                 }
@@ -245,7 +259,9 @@ impl DartFile {
 
     fn add_to_json(class: &DartClass, lines: &mut Vec<String>) {
         lines.push("\n  Map<String, dynamic> toJson() => {".to_string());
-        for DartField { name, typ } in &class.fields {
+        for field in &class.fields {
+            let DartField { name, typ, .. } = field;
+            let key = field.json_key();
             let value = match typ {
                 DartType::Concrete(concrete) => concrete.to_json_value(name.to_string()),
                 DartType::GenericList { typ, nullable } => {
@@ -258,18 +274,18 @@ impl DartFile {
                     }
                 }
             };
-            lines.push(format!("    '{name}': {value},"));
+            lines.push(format!("    '{key}': {value},"));
         }
         lines.push("  };".to_string());
     }
 
     fn add_copy_with(class: &DartClass, lines: &mut Vec<String>) {
         lines.push(format!("\n  {} copyWith({{", class.name));
-        for DartField { name, typ } in &class.fields {
+        for DartField { name, typ, .. } in &class.fields {
             lines.push(format!("    {}? {name},", typ.non_null_type_string()));
         }
         lines.push(format!("  }}) => {}(", class.name));
-        for DartField { name, typ: _ } in &class.fields {
+        for DartField { name, .. } in &class.fields {
             lines.push(format!("    {name}: {name} ?? this.{name},"));
         }
         lines.push("  );".to_string());
@@ -280,7 +296,7 @@ impl DartFile {
             "\n  @override\n  String toString() => '{}('",
             class.name
         ));
-        for DartField { name, typ: _ } in &class.fields {
+        for DartField { name, .. } in &class.fields {
             lines.push(format!("    '{name}: ${name} '",));
         }
         lines.push("    ')';".to_string());
@@ -291,7 +307,7 @@ impl DartFile {
         lines.push("    if (identical(this, other)) return true;".to_string());
         lines.push(format!("    return other is {}", class.name));
         let mut equals = vec![];
-        for DartField { name, typ: _ } in &class.fields {
+        for DartField { name, .. } in &class.fields {
             equals.push(format!("      && other.{name} == {name}"));
         }
         lines.push(equals.join("\n") + ";");
@@ -301,7 +317,7 @@ impl DartFile {
     fn add_hash_code(class: &DartClass, lines: &mut Vec<String>) {
         // hashCode
         lines.push("\n  @override\n  int get hashCode => Object.hashAll([".to_string());
-        for DartField { name, typ: _ } in &class.fields {
+        for DartField { name, .. } in &class.fields {
             lines.push(format!("    {}.hashCode,", name));
         }
         lines.push("  ]);".to_string());
@@ -328,10 +344,21 @@ impl DartClass {
 struct DartField {
     name: String,
     typ: DartType,
+    options: Option<FieldOptions>,
 }
 impl DartField {
-    fn new(name: String, typ: DartType) -> Self {
-        Self { name, typ }
+    fn new(name: String, typ: DartType, options: Option<FieldOptions>) -> Self {
+        Self { name, typ, options }
+    }
+
+    fn json_key(&self) -> String {
+        match &self.options {
+            Some(o) => match &o.key {
+                Some(k) => k.clone(),
+                None => self.name.clone(),
+            },
+            None => self.name.clone(),
+        }
     }
 }
 
@@ -453,5 +480,25 @@ impl DartType {
             DartType::Concrete(concrete) => concrete.non_null_type_string(),
             DartType::GenericList { typ, nullable: _ } => format!("List<{}>", typ.type_string()),
         }
+    }
+}
+
+#[derive(Debug)]
+struct FieldOptions {
+    key: Option<String>,
+}
+impl FieldOptions {
+    fn new(key: Option<String>) -> Self {
+        Self { key }
+    }
+
+    fn from_string(value: &str) -> Option<Self> {
+        let field_comment_key_regex = Regex::new(FIELD_COMMENT_KEY_REGEX).unwrap();
+        if let Some(cap) = field_comment_key_regex.captures(value) {
+            return Some(FieldOptions::new(
+                cap.name("key").map(|e| e.as_str().to_string()),
+            ));
+        }
+        None
     }
 }
