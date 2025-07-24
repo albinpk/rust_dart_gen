@@ -5,8 +5,8 @@ use std::{fs, thread};
 const FLU_ANNOTATION: &str = "// @flu";
 const CLASS_REGEX: &str = r"^abstract class _(\w+) \{";
 const FIELD_REGEX: &str = r"^\s\s([A-Za-z_].*) get (\w+);$";
-const FIELD_COMMENT_REGEX: &str = r#"^\s\s// @flu: (.*)$"#;
-const FIELD_COMMENT_KEY_REGEX: &str = r#".*key="(?P<key>.+)".*"#;
+const FIELD_ANNOTATION_REGEX: &str = r#"^  // @flu: (.*)$"#;
+const FIELD_OPTIONS_REGEX: &str = r#"(?P<key>\w+)(?:=(?P<value>"[^"]+"|\S+))?"#;
 const GENERIC_LIST_REGEX: &str = r"^List<([A-Za-z_].*)>";
 
 // TODO: deep collection
@@ -80,7 +80,7 @@ impl DartFile {
     fn from_string(content: &str, path: &str) -> Self {
         let class_regex = Regex::new(CLASS_REGEX).unwrap();
         let field_regex = Regex::new(FIELD_REGEX).unwrap();
-        let field_comment_regex = Regex::new(FIELD_COMMENT_REGEX).unwrap();
+        let field_comment_regex = Regex::new(FIELD_ANNOTATION_REGEX).unwrap();
 
         let lines: Vec<String> = content.lines().map(String::from).collect();
         let mut classes: Vec<DartClass> = vec![];
@@ -130,7 +130,7 @@ impl DartFile {
                 && let Some(cap) = field_regex.captures(line)
             {
                 let options = match field_comment_regex.captures(&lines[i - 1]) {
-                    Some(cap) => FieldOptions::from_string(&cap[1]),
+                    Some(cap) => Some(FieldOptions::from_string(&cap[1])),
                     None => None,
                 };
                 classes.last_mut().unwrap().fields.push(DartField::new(
@@ -492,13 +492,28 @@ impl FieldOptions {
         Self { key }
     }
 
-    fn from_string(value: &str) -> Option<Self> {
-        let field_comment_key_regex = Regex::new(FIELD_COMMENT_KEY_REGEX).unwrap();
-        if let Some(cap) = field_comment_key_regex.captures(value) {
-            return Some(FieldOptions::new(
-                cap.name("key").map(|e| e.as_str().to_string()),
-            ));
+    fn from_string(value: &str) -> Self {
+        let field_comment_key_regex = Regex::new(FIELD_OPTIONS_REGEX).unwrap();
+        let mut key: Option<String> = None;
+        for cap in field_comment_key_regex.captures_iter(value) {
+            if let (Some(k), v) = (cap.name("key"), cap.name("value")) {
+                match v {
+                    Some(v) => {
+                        let mut value = v.as_str();
+                        if value.starts_with('"') && value.ends_with('"') {
+                            value = &value[1..value.len() - 1];
+                        }
+                        match k.as_str() {
+                            "key" => key = Some(value.to_string()),
+                            _ => {}
+                        }
+                    }
+                    None => {
+                        println!("===== flag: '{}'", k.as_str());
+                    }
+                }
+            }
         }
-        None
+        return FieldOptions::new(key);
     }
 }
