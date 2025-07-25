@@ -129,13 +129,14 @@ impl DartFile {
             if depth == 1
                 && let Some(cap) = field_regex.captures(line)
             {
+                // checking for field options above the field
                 let options = match field_comment_regex.captures(&lines[i - 1]) {
                     Some(cap) => Some(FieldOptions::from_string(&cap[1])),
                     None => None,
                 };
                 classes.last_mut().unwrap().fields.push(DartField::new(
                     cap[2].to_string(),
-                    DartType::new(cap[1].to_string()),
+                    DartType::from_string_and_options(cap[1].to_string(), &options),
                     options,
                 ));
             } else {
@@ -265,7 +266,9 @@ impl DartFile {
             let value = match typ {
                 DartType::Concrete(concrete) => concrete.to_json_value(name.to_string()),
                 DartType::GenericList { typ, nullable } => {
-                    if typ.is_custom() || matches!(typ.typ, ConcreteType::DateTime) {
+                    if typ.is_custom()
+                        || matches!(typ.typ, ConcreteType::DateTime | ConcreteType::Enum(_))
+                    {
                         let mapper = format!("(e) => {}", typ.to_json_value("e".to_string()));
                         let null_mark = if *nullable { "?" } else { "" };
                         format!("{name}{null_mark}.map({mapper}).toList()")
@@ -368,6 +371,7 @@ enum ConcreteType {
     Double,
     Bool,
     String,
+    Enum(String),
     DateTime,
     Custom(String),
 }
@@ -401,6 +405,7 @@ impl Concrete {
             ConcreteType::Double => "double".to_string(),
             ConcreteType::Bool => "bool".to_string(),
             ConcreteType::String => "String".to_string(),
+            ConcreteType::Enum(name) => name.to_string(),
             ConcreteType::DateTime => "DateTime".to_string(),
             ConcreteType::Custom(name) => name.clone(),
         } + null_mark;
@@ -434,6 +439,16 @@ impl Concrete {
         match &self.typ {
             ConcreteType::Int => format!("({key} as num{null_mark}){null_mark}.toInt()"),
             ConcreteType::Double => format!("({key} as num{null_mark}){null_mark}.toDouble()"),
+            ConcreteType::Enum(name) => {
+                format!(
+                    "{}{name}.values.singleWhere((v) => v.name == {key} as String)",
+                    if self.nullable {
+                        format!("{key} == null ? null : ")
+                    } else {
+                        "".to_string()
+                    }
+                )
+            }
             ConcreteType::DateTime => format!(
                 "{}DateTime.parse({key} as String)",
                 if self.nullable {
@@ -455,6 +470,7 @@ impl Concrete {
             | ConcreteType::Double
             | ConcreteType::Bool
             | ConcreteType::String => key,
+            ConcreteType::Enum(_) => format!("{key}{null_mark}.name"),
             ConcreteType::DateTime => format!("{key}{null_mark}.toIso8601String()"),
             ConcreteType::Custom(_) => format!("{key}{null_mark}.toJson()"),
         }
@@ -467,14 +483,33 @@ enum DartType {
     GenericList { typ: Concrete, nullable: bool },
 }
 impl DartType {
-    fn new(name: String) -> Self {
+    fn from_string_and_options(name: String, options: &Option<FieldOptions>) -> Self {
         let generic_list_regex = Regex::new(GENERIC_LIST_REGEX).unwrap();
+        let nullable = name.ends_with('?');
         match generic_list_regex.captures(&name) {
             Some(cap) => Self::GenericList {
-                typ: Concrete::from_string(&cap[1]),
-                nullable: name.ends_with("?"),
+                typ: match options {
+                    Some(o) => match o.is_enum {
+                        true => Concrete::new(
+                            ConcreteType::Enum(cap[1].replace("?", "")),
+                            cap[1].ends_with("?"),
+                        ),
+                        false => Concrete::from_string(&cap[1]),
+                    },
+                    None => Concrete::from_string(&cap[1]),
+                },
+                nullable,
             },
-            None => Self::Concrete(Concrete::from_string(&name)),
+            None => match options {
+                Some(o) => match o.is_enum {
+                    true => Self::Concrete(Concrete::new(
+                        ConcreteType::Enum(name.replace("?", "")),
+                        nullable,
+                    )),
+                    false => Self::Concrete(Concrete::from_string(&name)),
+                },
+                None => Self::Concrete(Concrete::from_string(&name)),
+            },
         }
     }
 
@@ -502,15 +537,17 @@ impl DartType {
 #[derive(Debug)]
 struct FieldOptions {
     key: Option<String>,
+    is_enum: bool,
 }
 impl FieldOptions {
-    fn new(key: Option<String>) -> Self {
-        Self { key }
+    fn new(key: Option<String>, is_enum: bool) -> Self {
+        Self { key, is_enum }
     }
 
     fn from_string(value: &str) -> Self {
         let field_comment_key_regex = Regex::new(FIELD_OPTIONS_REGEX).unwrap();
         let mut key: Option<String> = None;
+        let mut is_enum = false;
         for cap in field_comment_key_regex.captures_iter(value) {
             if let (Some(k), v) = (cap.name("key"), cap.name("value")) {
                 match v {
@@ -524,12 +561,13 @@ impl FieldOptions {
                             _ => {}
                         }
                     }
-                    None => {
-                        println!("===== flag: '{}'", k.as_str());
-                    }
+                    None => match k.as_str() {
+                        "enum" => is_enum = true,
+                        _ => {}
+                    },
                 }
             }
         }
-        return FieldOptions::new(key);
+        return FieldOptions::new(key, is_enum);
     }
 }
