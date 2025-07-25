@@ -5,7 +5,7 @@ use std::{fs, thread};
 const FLU_ANNOTATION: &str = "// @flu";
 const CLASS_REGEX: &str = r"^abstract class _(\w+) \{";
 const FIELD_REGEX: &str = r"^\s\s([A-Za-z_].*) get (\w+);$";
-const FIELD_ANNOTATION_REGEX: &str = r#"^  // @flu: (.*)$"#;
+const FIELD_ANNOTATION_REGEX: &str = r#"^  // @flu (.*)$"#;
 const FIELD_OPTIONS_REGEX: &str = r#"(?P<key>\w+)(?:=(?P<value>"[^"]+"|\S+))?"#;
 const GENERIC_LIST_REGEX: &str = r"^List<([A-Za-z_].*)>";
 
@@ -265,7 +265,7 @@ impl DartFile {
             let value = match typ {
                 DartType::Concrete(concrete) => concrete.to_json_value(name.to_string()),
                 DartType::GenericList { typ, nullable } => {
-                    if typ.is_custom() {
+                    if typ.is_custom() || matches!(typ.typ, ConcreteType::DateTime) {
                         let mapper = format!("(e) => {}", typ.to_json_value("e".to_string()));
                         let null_mark = if *nullable { "?" } else { "" };
                         format!("{name}{null_mark}.map({mapper}).toList()")
@@ -368,6 +368,7 @@ enum ConcreteType {
     Double,
     Bool,
     String,
+    DateTime,
     Custom(String),
 }
 
@@ -388,6 +389,7 @@ impl Concrete {
             "double" => Self::new(ConcreteType::Double, nullable),
             "bool" => Self::new(ConcreteType::Bool, nullable),
             "String" => Self::new(ConcreteType::String, nullable),
+            "DateTime" => Self::new(ConcreteType::DateTime, nullable),
             custom => Self::new(ConcreteType::Custom(custom.to_string()), nullable),
         }
     }
@@ -399,6 +401,7 @@ impl Concrete {
             ConcreteType::Double => "double".to_string(),
             ConcreteType::Bool => "bool".to_string(),
             ConcreteType::String => "String".to_string(),
+            ConcreteType::DateTime => "DateTime".to_string(),
             ConcreteType::Custom(name) => name.clone(),
         } + null_mark;
     }
@@ -422,7 +425,7 @@ impl Concrete {
                 self.non_null_type_string()
             );
             if self.nullable {
-                return format!("{key} != null ? {factory} : null",);
+                return format!("{key} == null ? null : {factory}");
             }
             return factory;
         }
@@ -431,6 +434,14 @@ impl Concrete {
         match &self.typ {
             ConcreteType::Int => format!("({key} as num{null_mark}){null_mark}.toInt()"),
             ConcreteType::Double => format!("({key} as num{null_mark}){null_mark}.toDouble()"),
+            ConcreteType::DateTime => format!(
+                "{}DateTime.parse({key} as String)",
+                if self.nullable {
+                    format!("{key} == null ? null : ")
+                } else {
+                    "".to_string()
+                }
+            ),
             ConcreteType::Bool | ConcreteType::String | ConcreteType::Custom(_) => {
                 format!("{key} as {}", self.type_string())
             }
@@ -438,10 +449,15 @@ impl Concrete {
     }
 
     fn to_json_value(&self, key: String) -> String {
-        if !self.is_custom() {
-            return key;
+        let null_mark = if self.nullable { "?" } else { "" };
+        match self.typ {
+            ConcreteType::Int
+            | ConcreteType::Double
+            | ConcreteType::Bool
+            | ConcreteType::String => key,
+            ConcreteType::DateTime => format!("{key}{null_mark}.toIso8601String()"),
+            ConcreteType::Custom(_) => format!("{key}{null_mark}.toJson()"),
         }
-        format!("{key}{}.toJson()", if self.nullable { "?" } else { "" })
     }
 }
 
