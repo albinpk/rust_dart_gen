@@ -1,6 +1,6 @@
 use glob::glob;
 use regex::Regex;
-use std::{fs, thread};
+use std::{fs, path::Path, thread};
 
 const FLU_ANNOTATION: &str = "// @flu";
 const CLASS_REGEX: &str = r"^abstract class _(\w+) \{";
@@ -27,8 +27,6 @@ fn main() {
             }
         }
     }
-
-    println!("Found {} dart files", dart_paths.len());
 
     // true == enable multi-threading
     if true {
@@ -58,8 +56,6 @@ fn main() {
             }
         }
     }
-
-    println!("{} files generated", dart_paths.len());
 }
 
 #[derive(Debug)]
@@ -162,13 +158,12 @@ impl DartFile {
     }
 
     fn file_name(&self) -> String {
-        self.path.split("/").last().unwrap().to_string()
-        // Path::new(&self.path)
-        //     .file_name()
-        //     .unwrap()
-        //     .to_str()
-        //     .unwrap()
-        //     .to_string()
+        Path::new(&self.path)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
     }
 
     fn generate_file(&self) {
