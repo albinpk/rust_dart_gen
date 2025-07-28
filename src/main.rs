@@ -10,6 +10,7 @@ const FIELD_OPTIONS_REGEX: &str = r#"(?P<key>\w+)(?:=(?P<value>"[^"]+"|\S+))?"#;
 const GENERIC_LIST_REGEX: &str = r"^List<([A-Za-z_].*)>";
 
 // TODO: deep collection
+// empty class
 
 fn main() {
     let mut dart_paths: Vec<String> = vec![];
@@ -280,7 +281,22 @@ impl DartFile {
     fn add_copy_with(class: &DartClass, lines: &mut Vec<String>) {
         lines.push(format!("\n  {} copyWith({{", class.name));
         for DartField { name, typ, .. } in &class.fields {
-            lines.push(format!("    {}? {name},", typ.non_null_type_string()));
+            // no ? for dynamic
+            let null_mark = if matches!(
+                typ,
+                DartType::Concrete(Concrete {
+                    typ: ConcreteType::Dynamic,
+                    ..
+                })
+            ) {
+                ""
+            } else {
+                "?"
+            };
+            lines.push(format!(
+                "    {}{null_mark} {name},",
+                typ.non_null_type_string()
+            ));
         }
         lines.push(format!("  }}) => {}(", class.name));
         for DartField { name, .. } in &class.fields {
@@ -366,6 +382,7 @@ enum ConcreteType {
     Double,
     Bool,
     String,
+    Dynamic,
     Enum(String),
     DateTime,
     Custom(String),
@@ -387,6 +404,7 @@ impl Concrete {
             "int" => Self::new(ConcreteType::Int, nullable),
             "double" => Self::new(ConcreteType::Double, nullable),
             "bool" => Self::new(ConcreteType::Bool, nullable),
+            "dynamic" => Self::new(ConcreteType::Dynamic, false),
             "String" => Self::new(ConcreteType::String, nullable),
             "DateTime" => Self::new(ConcreteType::DateTime, nullable),
             custom => Self::new(ConcreteType::Custom(custom.to_string()), nullable),
@@ -394,12 +412,17 @@ impl Concrete {
     }
 
     fn type_string(&self) -> String {
-        let null_mark = if self.nullable { "?" } else { "" };
+        let null_mark = if self.nullable && !matches!(self.typ, ConcreteType::Dynamic) {
+            "?"
+        } else {
+            ""
+        };
         return match &self.typ {
             ConcreteType::Int => "int".to_string(),
             ConcreteType::Double => "double".to_string(),
             ConcreteType::Bool => "bool".to_string(),
             ConcreteType::String => "String".to_string(),
+            ConcreteType::Dynamic => "dynamic".to_string(),
             ConcreteType::Enum(name) => name.to_string(),
             ConcreteType::DateTime => "DateTime".to_string(),
             ConcreteType::Custom(name) => name.clone(),
@@ -444,6 +467,7 @@ impl Concrete {
                     }
                 )
             }
+            ConcreteType::Dynamic => key,
             ConcreteType::DateTime => format!(
                 "{}DateTime.parse({key} as String)",
                 if self.nullable {
@@ -464,6 +488,7 @@ impl Concrete {
             ConcreteType::Int
             | ConcreteType::Double
             | ConcreteType::Bool
+            | ConcreteType::Dynamic
             | ConcreteType::String => key,
             ConcreteType::Enum(_) => format!("{key}{null_mark}.name"),
             ConcreteType::DateTime => format!("{key}{null_mark}.toIso8601String()"),
@@ -540,10 +565,10 @@ impl FieldOptions {
     }
 
     fn from_string(value: &str) -> Self {
-        let field_comment_key_regex = Regex::new(FIELD_OPTIONS_REGEX).unwrap();
+        let field_option_regex = Regex::new(FIELD_OPTIONS_REGEX).unwrap();
         let mut key: Option<String> = None;
         let mut is_enum = false;
-        for cap in field_comment_key_regex.captures_iter(value) {
+        for cap in field_option_regex.captures_iter(value) {
             if let (Some(k), v) = (cap.name("key"), cap.name("value")) {
                 match v {
                     Some(v) => {
