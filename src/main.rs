@@ -10,7 +10,6 @@ const FIELD_OPTIONS_REGEX: &str = r#"(?P<key>\w+)(?:=(?P<value>"[^"]+"|\S+))?"#;
 const GENERIC_LIST_REGEX: &str = r"^List<([A-Za-z_].*)>";
 
 // TODO: deep collection
-// empty class
 
 fn main() {
     let mut dart_paths: Vec<String> = vec![];
@@ -108,8 +107,10 @@ impl DartFile {
                 if let Some(cap) = class_regex.captures(line) {
                     // start of a @flu class
                     classes.push(DartClass::new(cap[1].to_string(), false, vec![]));
-                    class_start = true;
-                    depth = 1;
+                    if !line.ends_with("}") {
+                        class_start = true;
+                        depth = 1;
+                    }
                 }
                 continue;
             }
@@ -210,11 +211,15 @@ impl DartFile {
         } else {
             ""
         };
-        lines.push(format!("  {const_key}{}({{", class.name));
-        for field in &class.fields {
-            lines.push(format!("    required this.{},", field.name));
+        if class.fields.is_empty() {
+            lines.push(format!("  {const_key}{}();", class.name));
+        } else {
+            lines.push(format!("  {const_key}{}({{", class.name));
+            for field in &class.fields {
+                lines.push(format!("    required this.{},", field.name));
+            }
+            lines.push("  });".to_string());
         }
-        lines.push("  });".to_string());
     }
 
     fn add_from_json(class: &DartClass, lines: &mut Vec<String>) {
@@ -223,7 +228,6 @@ impl DartFile {
             class.name
         ));
         lines.push(format!("    return {}(", class.name));
-
         for field in &class.fields {
             let DartField { name, typ, .. } = field;
             let key = field.json_key();
@@ -279,30 +283,37 @@ impl DartFile {
     }
 
     fn add_copy_with(class: &DartClass, lines: &mut Vec<String>) {
-        lines.push(format!("\n  {} copyWith({{", class.name));
-        for DartField { name, typ, .. } in &class.fields {
-            // no ? for dynamic
-            let null_mark = if matches!(
-                typ,
-                DartType::Concrete(Concrete {
-                    typ: ConcreteType::Dynamic,
-                    ..
-                })
-            ) {
-                ""
-            } else {
-                "?"
-            };
+        if class.fields.is_empty() {
             lines.push(format!(
-                "    {}{null_mark} {name},",
-                typ.non_null_type_string()
+                "\n  {} copyWith() => {}();",
+                class.name, class.name
             ));
+        } else {
+            lines.push(format!("\n  {} copyWith({{", class.name));
+            for DartField { name, typ, .. } in &class.fields {
+                // no ? for dynamic
+                let null_mark = if matches!(
+                    typ,
+                    DartType::Concrete(Concrete {
+                        typ: ConcreteType::Dynamic,
+                        ..
+                    })
+                ) {
+                    ""
+                } else {
+                    "?"
+                };
+                lines.push(format!(
+                    "    {}{null_mark} {name},",
+                    typ.non_null_type_string()
+                ));
+            }
+            lines.push(format!("  }}) => {}(", class.name));
+            for DartField { name, .. } in &class.fields {
+                lines.push(format!("    {name}: {name} ?? this.{name},"));
+            }
+            lines.push("  );".to_string());
         }
-        lines.push(format!("  }}) => {}(", class.name));
-        for DartField { name, .. } in &class.fields {
-            lines.push(format!("    {name}: {name} ?? this.{name},"));
-        }
-        lines.push("  );".to_string());
     }
 
     fn add_to_string(class: &DartClass, lines: &mut Vec<String>) {
@@ -319,22 +330,33 @@ impl DartFile {
     fn add_equal_operator(class: &DartClass, lines: &mut Vec<String>) {
         lines.push("\n  @override\n  bool operator ==(Object other) {".to_string());
         lines.push("    if (identical(this, other)) return true;".to_string());
-        lines.push(format!("    return other is {}", class.name));
-        let mut equals = vec![];
-        for DartField { name, .. } in &class.fields {
-            equals.push(format!("      && other.{name} == {name}"));
+        if class.fields.is_empty() {
+            lines.push(format!(
+                "    return other is {} && other == this;",
+                class.name
+            ));
+        } else {
+            lines.push(format!("    return other is {}", class.name));
+            let mut equals = vec![];
+            for DartField { name, .. } in &class.fields {
+                equals.push(format!("      && other.{name} == {name}"));
+            }
+            lines.push(equals.join("\n") + ";");
         }
-        lines.push(equals.join("\n") + ";");
         lines.push("  }".to_string());
     }
 
     fn add_hash_code(class: &DartClass, lines: &mut Vec<String>) {
-        // hashCode
-        lines.push("\n  @override\n  int get hashCode => Object.hashAll([".to_string());
-        for DartField { name, .. } in &class.fields {
-            lines.push(format!("    {}.hashCode,", name));
+        lines.push("\n  @override".to_string());
+        if class.fields.is_empty() {
+            lines.push("  int get hashCode => super.hashCode;".to_string());
+        } else {
+            lines.push("  int get hashCode => Object.hashAll([".to_string());
+            for DartField { name, .. } in &class.fields {
+                lines.push(format!("    {}.hashCode,", name));
+            }
+            lines.push("  ]);".to_string());
         }
-        lines.push("  ]);".to_string());
     }
 }
 
