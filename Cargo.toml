@@ -1,7 +1,9 @@
 [package]
 name = "rust_dart_gen"
+description = "A Dart code generator built using Rust"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 glob = "0.3.2"
