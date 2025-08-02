@@ -1,3 +1,4 @@
+use clap::Parser;
 use glob::glob;
 use regex::Regex;
 use std::{fs, path::Path, thread};
@@ -11,9 +12,19 @@ const GENERIC_LIST_REGEX: &str = r"^List<([A-Za-z_].*)>";
 
 // TODO: deep collection
 
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Path to dart files
+    #[arg(short, long, default_value = "lib/**/*.dart")]
+    path: String,
+}
+
 fn main() {
+    let args = Args::parse();
+
     let mut dart_paths: Vec<String> = vec![];
-    for entry in glob("lib/**/*.dart").expect("Failed to read glob pattern") {
+    for entry in glob(&args.path).expect("Failed to read glob pattern") {
         match entry {
             Err(_) => (),
             Ok(path) => {
