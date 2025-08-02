@@ -1,3 +1,9 @@
+## [0.2.0] - 2025-08-02
+
+### 🚀 Features
+
+- Add command-line argument parsing with clap
+
 ## [0.1.0] - 2025-07-29
 
 ### 🚀 Features
